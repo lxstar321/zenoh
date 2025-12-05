@@ -51,6 +51,7 @@ members = [
   "plugins/zenoh-plugin-rest",
   "plugins/zenoh-plugin-storage-manager",
   "plugins/zenoh-plugin-trait",
+  "plugins/zenoh-plugin-gateway-auth",
   "zenoh",
   "zenoh-ext",
   "zenoh-ext/examples",

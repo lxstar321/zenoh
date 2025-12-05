@@ -1,0 +1,63 @@
+{
+  /// Zenoh Router 配置 - 代理模式
+  /// 插件作为独立的认证代理服务运行
+
+  mode: "router",
+
+  /// 节点元数据
+  metadata: {
+    name: "zenoh-router-proxy",
+    location: "proxy-gateway",
+    description: "Router with proxy gateway plugin (basic version)"
+  },
+
+  /// 监听配置 - 内部网络端口（受保护）
+  listen: {
+    endpoints: { router: ["tcp/127.0.0.1:7448"] },
+    exit_on_failure: true,
+  },
+
+  /// 代理网关插件配置
+  /// 插件将在外部端口监听，并将连接转发到内部Router
+  plugins: {
+    gateway_auth: {
+      // 启用代理模式
+      enable_proxy_mode: true,
+
+      // 监听外部连接的地址
+      listen_address: "0.0.0.0:7447",
+
+      // 转发到的后端Zenoh Router地址
+      backend_address: "127.0.0.1:7448",
+
+      // 暂时禁用mTLS认证用于调试
+      enable_mtls: true,
+
+      // TLS证书配置
+      ca_certificate: "/root/luo/project/zenoh/test_tls_certs/ca.pem",
+      server_certificate: "/root/luo/project/zenoh/test_tls_certs/serverside.pem",
+      server_private_key: "/root/luo/project/zenoh/test_tls_certs/serversidekey.pem",
+
+      // 认证服务URL
+      auth_service_url: "http://localhost:8080",
+
+      // 认证服务请求超时时间
+      request_timeout_seconds: 10,
+
+      // 权限缓存过期时间
+      cache_ttl_seconds: 3600,
+
+      // 调试日志
+      enable_debug_logging: true
+    }
+  },
+
+  /// 管理空间
+  adminspace: {
+    enabled: true,
+    permissions: {
+      read: true,
+      write: false,
+    },
+  },
+}

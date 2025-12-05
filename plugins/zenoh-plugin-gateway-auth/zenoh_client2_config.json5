@@ -1,0 +1,184 @@
+{
+  /// Zenoh 客户端2配置 - 连接到 mTLS Router
+  /// 用于测试消息转发功能
+
+  mode: "client",
+
+  /// 节点元数据
+  metadata: {
+    name: "zenoh-client-2",
+    location: "test-client-2",
+    description: "Client 2 for message forwarding test"
+  },
+
+  /// 连接到 Router 的配置
+  connect: {
+    timeout_ms: 10000,
+    endpoints: [
+      // 连接到 Router 的 mTLS 端点
+      "tls/127.0.0.1:7447"
+    ],
+    exit_on_failure: true,
+    retry: {
+      period_init_ms: 1000,
+      period_max_ms: 4000,
+      period_increase_factor: 2,
+    },
+  },
+
+  /// 监听配置 (可选，用于其他客户端连接)
+  listen: {
+    timeout_ms: 0,
+    endpoints: [],
+    exit_on_failure: true,
+    retry: {
+      period_init_ms: 1000,
+      period_max_ms: 4000,
+      period_increase_factor: 2,
+    },
+  },
+
+  /// 会话打开条件
+  open: {
+    return_conditions: {
+      connect_scouted: true,
+      declares: true,
+    },
+  },
+
+  /// 自动发现机制配置
+  scouting: {
+    timeout: 3000,
+    delay: 500,
+    multicast: {
+      enabled: true,
+      address: "224.0.0.224:7446",
+      interface: "auto",
+      ttl: 1,
+      autoconnect: { router: ["router"], peer: ["router", "peer"], client: ["router"] },
+      autoconnect_strategy: { peer: { to_router: "always", to_peer: "always" } },
+      listen: true,
+    },
+    gossip: {
+      enabled: true,
+      multihop: false,
+      target: { router: ["router", "peer"], peer: ["router", "peer"] },
+      autoconnect: { router: [], peer: ["router", "peer"] },
+      autoconnect_strategy: { peer: { to_router: "always", to_peer: "always" } },
+    },
+  },
+
+  /// 时间戳管理
+  timestamping: {
+    enabled: { router: false, peer: false, client: false },
+    drop_future_timestamp: false,
+  },
+
+  /// 查询默认超时时间
+  queries_default_timeout: 10000,
+
+  /// 传输层配置
+  transport: {
+    unicast: {
+      open_timeout: 10000,
+      accept_timeout: 10000,
+      accept_pending: 100,
+      max_sessions: 1000,
+      max_links: 1,
+      lowlatency: false,
+      qos: {
+        enabled: true,
+      },
+      compression: {
+        enabled: false,
+      },
+    },
+    multicast: {
+      join_interval: 2500,
+      max_sessions: 1000,
+      qos: {
+        enabled: false,
+      },
+      compression: {
+        enabled: false,
+      },
+    },
+    link: {
+      tx: {
+        sequence_number_resolution: "32bit",
+        lease: 10000,
+        keep_alive: 4,
+        batch_size: 65535,
+        queue: {
+          size: {
+            control: 2,
+            real_time: 2,
+            interactive_high: 2,
+            interactive_low: 2,
+            data_high: 2,
+            data: 2,
+            data_low: 2,
+            background: 2,
+          },
+          congestion_control: {
+            drop: {
+              wait_before_drop: 1000,
+              max_wait_before_drop_fragments: 50000,
+            },
+            block: {
+              wait_before_close: 5000000,
+            },
+          },
+          batching: {
+            enabled: true,
+            time_limit: 1,
+          },
+          allocation: {
+            mode: "lazy",
+          },
+        },
+      },
+      rx: {
+        buffer_size: 65535,
+        max_message_size: 1073741824,
+      },
+      /// TLS 配置 - 启用 mTLS 用于连接 Router
+      tls: {
+        /// CA 证书路径 - 用于验证 Router 证书
+        root_ca_certificate: "/root/luo/project/zenoh/test_tls_certs/ca.pem",
+        /// 服务端私钥路径 (如果需要监听)
+        listen_private_key: null,
+        /// 服务端证书路径 (如果需要监听)
+        listen_certificate: null,
+        /// 启用双向认证 (mTLS)
+        enable_mtls: true,
+        /// 客户端私钥路径
+        connect_private_key: "/root/luo/project/zenoh/test_tls_certs/monitor-client-001key.pem",
+        /// 客户端证书路径
+        connect_certificate: "/root/luo/project/zenoh/test_tls_certs/monitor-client-001.pem",
+        /// 连接时验证证书中的主机名
+        verify_name_on_connect: false,
+        /// 证书过期时关闭连接
+        close_link_on_expiration: true,
+      },
+    },
+    shared_memory: {
+      enabled: true,
+      mode: "lazy",
+      transport_optimization: {
+        enabled: true,
+        pool_size: 16777216,
+        message_size_threshold: 3072,
+      },
+    },
+  },
+
+  /// 管理空间配置
+  adminspace: {
+    enabled: false,
+    permissions: {
+      read: false,
+      write: false,
+    },
+  },
+}

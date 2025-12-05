@@ -1,0 +1,44 @@
+[package]
+name = "zenoh-plugin-gateway-auth"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = false
+description = "Zenoh Gateway Authentication Plugin with External Auth Service"
+homepage = "https://zenoh.io"
+repository = "https://github.com/eclipse-zenoh/zenoh"
+categories = ["network-programming"]
+keywords = ["zenoh", "plugin", "authentication", "gateway", "tls", "mtls"]
+
+[features]
+default = ["dynamic_plugin"]
+dynamic_plugin = []
+
+[dependencies]
+futures = { workspace = true }
+lazy_static = { workspace = true }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+rustls = "0.23"
+rustls-pki-types = "1.13"
+rustls-pemfile = "2.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "net", "io-util"] }
+tokio-rustls = "0.26"
+tracing = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
+x509-parser = "0.18"
+zenoh = { workspace = true, features = [
+  "default",
+  "internal",
+  "plugins",
+  "unstable",
+] }
+zenoh-plugin-trait = { workspace = true }
+zenoh-util = { workspace = true }
+
+[lib]
+name = "zenoh_plugin_gateway_auth"
+crate-type = ["cdylib"]
