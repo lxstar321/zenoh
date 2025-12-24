@@ -22,6 +22,7 @@ mod common;
 pub(crate) mod primitives;
 pub(crate) mod protocol;
 pub(crate) mod routing;
+pub(crate) mod dynamic_acl;
 #[doc(hidden)]
 pub mod runtime;
 

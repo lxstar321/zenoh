@@ -23,7 +23,8 @@ use ahash::RandomState;
 use itertools::Itertools;
 use zenoh_config::{
     AclConfig, AclConfigPolicyEntry, AclConfigRule, AclConfigSubjects, AclMessage, CertCommonName,
-    InterceptorFlow, InterceptorLink, Interface, Permission, PolicyRule, Username, ZenohId,
+    InterceptorFlow, InterceptorLink, Interface, Permission, PolicyRule, QueryStrategy, Username,
+    ZenohId,
 };
 use zenoh_keyexpr::{
     keyexpr,
@@ -291,86 +292,139 @@ impl PolicyEnforcer {
         self.acl_enabled = mut_acl_config.enabled;
         self.default_permission = mut_acl_config.default_permission;
         if self.acl_enabled {
-            if let (Some(mut rules), Some(mut subjects), Some(policies)) = (
-                mut_acl_config.rules,
-                mut_acl_config.subjects,
-                mut_acl_config.policies,
-            ) {
-                if rules.is_empty() || subjects.is_empty() || policies.is_empty() {
-                    rules.is_empty().then(|| {
-                        tracing::warn!("Access control rules list is empty in config file")
-                    });
-                    subjects.is_empty().then(|| {
-                        tracing::warn!("Access control subjects list is empty in config file")
-                    });
-                    policies.is_empty().then(|| {
-                        tracing::warn!("Access control policies list is empty in config file")
-                    });
-                    self.policy_map = PolicyMap::default();
-                    self.subject_store = SubjectStore::default();
+            // 根据query_strategy决定使用哪种ACL模式
+            let query_strategy = mut_acl_config
+                .query_strategy
+                .as_ref()
+                .cloned()
+                .unwrap_or(QueryStrategy::Static);
+
+            match query_strategy {
+                QueryStrategy::Static => {
+                    tracing::info!("Initializing ACL with static mode");
+                    self.init_static_acl(&mut_acl_config)?;
+                }
+                QueryStrategy::Dynamic => {
+                    tracing::info!("Initializing ACL with dynamic mode");
+                    self.init_dynamic_acl(&mut_acl_config)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /*
+       initializes the policy_enforcer with dynamic ACL
+    */
+    fn init_dynamic_acl(&mut self, acl_config: &AclConfig) -> ZResult<()> {
+        let _dynamic_config = acl_config.dynamic_config.as_ref().ok_or(zerror!(
+            "Dynamic ACL mode requires dynamic_config configuration"
+        ))?;
+
+        tracing::info!(
+            "Initializing dynamic ACL mode - authentication service will handle client permissions"
+        );
+        // 动态模式下，我们不需要静态配置，只需要基本的PolicyEnforcer结构
+        // 具体的权限将由每个连接动态创建
+        self.policy_map = PolicyMap::default();
+        self.subject_store = SubjectStore::default();
+        if self.default_permission == Permission::Deny {
+            self.interface_enabled = InterfaceEnabled {
+                ingress: true,
+                egress: true,
+            };
+        }
+
+        tracing::info!(
+            "Dynamic ACL configuration initialized successfully - ready for client authentication"
+        );
+        Ok(())
+    }
+
+    /*
+       initializes the policy_enforcer with static ACL
+    */
+    fn init_static_acl(&mut self, acl_config: &AclConfig) -> ZResult<()> {
+        if let (Some(mut rules), Some(mut subjects), Some(policies)) = (
+            acl_config.rules.clone(),
+            acl_config.subjects.clone(),
+            acl_config.policies.clone(),
+        ) {
+            if rules.is_empty() || subjects.is_empty() || policies.is_empty() {
+                rules
+                    .is_empty()
+                    .then(|| tracing::warn!("Access control rules list is empty in config file"));
+                subjects.is_empty().then(|| {
+                    tracing::warn!("Access control subjects list is empty in config file")
+                });
+                policies.is_empty().then(|| {
+                    tracing::warn!("Access control policies list is empty in config file")
+                });
+                self.policy_map = PolicyMap::default();
+                self.subject_store = SubjectStore::default();
+                if self.default_permission == Permission::Deny {
+                    self.interface_enabled = InterfaceEnabled {
+                        ingress: true,
+                        egress: true,
+                    };
+                }
+            } else {
+                // check for undefined values in rules and initialize them to defaults
+                for rule in rules.iter_mut() {
+                    if rule.id.trim().is_empty() {
+                        bail!("Found empty rule id in rules list");
+                    }
+                    if rule.flows.is_none() {
+                        tracing::warn!("Rule '{}' flows list is not set. Setting it to both Ingress and Egress", rule.id);
+                        rule.flows = Some(
+                            [InterceptorFlow::Ingress, InterceptorFlow::Egress]
+                                .to_vec()
+                                .try_into()
+                                .unwrap(),
+                        );
+                    }
+                }
+                // check for undefined values in subjects and initialize them to defaults
+                for subject in subjects.iter_mut() {
+                    if subject.id.trim().is_empty() {
+                        bail!("Found empty subject id in subjects list");
+                    }
+                }
+                let policy_information =
+                    self.policy_information_point(subjects, rules, policies)?;
+
+                let mut main_policy: PolicyMap = PolicyMap::default();
+                for rule in policy_information.policy_rules {
+                    let subject_policy = main_policy.entry(rule.subject_id).or_default();
+                    subject_policy
+                        .flow_mut(rule.flow)
+                        .action_mut(rule.message)
+                        .permission_mut(rule.permission)
+                        .insert(&rule.key_expr, true);
+
                     if self.default_permission == Permission::Deny {
                         self.interface_enabled = InterfaceEnabled {
                             ingress: true,
                             egress: true,
                         };
-                    }
-                } else {
-                    // check for undefined values in rules and initialize them to defaults
-                    for rule in rules.iter_mut() {
-                        if rule.id.trim().is_empty() {
-                            bail!("Found empty rule id in rules list");
-                        }
-                        if rule.flows.is_none() {
-                            tracing::warn!("Rule '{}' flows list is not set. Setting it to both Ingress and Egress", rule.id);
-                            rule.flows = Some(
-                                [InterceptorFlow::Ingress, InterceptorFlow::Egress]
-                                    .to_vec()
-                                    .try_into()
-                                    .unwrap(),
-                            );
-                        }
-                    }
-                    // check for undefined values in subjects and initialize them to defaults
-                    for subject in subjects.iter_mut() {
-                        if subject.id.trim().is_empty() {
-                            bail!("Found empty subject id in subjects list");
-                        }
-                    }
-                    let policy_information =
-                        self.policy_information_point(subjects, rules, policies)?;
-
-                    let mut main_policy: PolicyMap = PolicyMap::default();
-                    for rule in policy_information.policy_rules {
-                        let subject_policy = main_policy.entry(rule.subject_id).or_default();
-                        subject_policy
-                            .flow_mut(rule.flow)
-                            .action_mut(rule.message)
-                            .permission_mut(rule.permission)
-                            .insert(&rule.key_expr, true);
-
-                        if self.default_permission == Permission::Deny {
-                            self.interface_enabled = InterfaceEnabled {
-                                ingress: true,
-                                egress: true,
-                            };
-                        } else {
-                            match rule.flow {
-                                InterceptorFlow::Ingress => {
-                                    self.interface_enabled.ingress = true;
-                                }
-                                InterceptorFlow::Egress => {
-                                    self.interface_enabled.egress = true;
-                                }
+                    } else {
+                        match rule.flow {
+                            InterceptorFlow::Ingress => {
+                                self.interface_enabled.ingress = true;
+                            }
+                            InterceptorFlow::Egress => {
+                                self.interface_enabled.egress = true;
                             }
                         }
                     }
-                    self.policy_map = main_policy;
-                    self.subject_store = policy_information.subject_map;
                 }
-            } else {
-                bail!("All ACL rules/subjects/policies config lists must be provided");
+                self.policy_map = main_policy;
+                self.subject_store = policy_information.subject_map;
             }
+        } else {
+            bail!("static ACL: All ACL rules/subjects/policies config lists must be provided");
         }
+
         Ok(())
     }
 

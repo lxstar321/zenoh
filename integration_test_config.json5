@@ -1,0 +1,60 @@
+/// 动态ACL与静态ACL集成测试配置
+/// 此配置文件测试动态ACL与静态ACL的交互
+{
+  /// 节点模式设置为路由器
+  mode: "router",
+
+  /// 节点元数据
+  metadata: {
+    name: "integration-test-router",
+    location: "test-zone",
+  },
+
+  /// 监听配置 - 使用 TLS 端点
+  listen: {
+    endpoints: ["tls/127.0.0.1:8447"],
+    exit_on_failure: true,
+  },
+
+  /// 传输层配置 - TLS设置
+  transport: {
+    link: {
+      tls: {
+        root_ca_certificate: "./certs/ca-cert.pem",
+        listen_private_key: "./certs/server-key.pem",
+        listen_certificate: "./certs/server-cert.pem",
+        enable_mtls: true,
+        connect_private_key: "./certs/client-key.pem",
+        connect_certificate: "./certs/client-cert.pem",
+        verify_name_on_connect: true,
+        close_link_on_expiration: true,
+      },
+    },
+  },
+
+  /// 启用管理空间
+  adminspace: {
+    enabled: true,
+    permissions: {
+      read: true,
+      write: true,
+    },
+  },
+
+  /// 访问控制列表配置 - 静态ACL + 动态ACL
+  access_control: {
+    /// 启用ACL功能
+    enabled: true,
+    /// 默认权限策略
+    default_permission: "deny",
+    query_strategy: "dynamic",
+    /// 动态ACL配置
+    dynamic_config: {
+      type: "http",
+      endpoint: "http://localhost:8080",
+      timeout_seconds: 5,
+      retry_attempts: 3,
+      retry_delay_seconds: 1
+    }
+  }
+}

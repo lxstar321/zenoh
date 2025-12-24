@@ -1,0 +1,179 @@
+# 动态ACL完整实现与数据流综合图
+#
+# 该文档展示了Zenoh动态ACL系统的完整实现架构和数据流
+#
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                           Zenoh路由器启动                              │
+# │  配置文件: access_control.query_strategy = "dynamic"               │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    ACL拦截器工厂创建                                 │
+# │  zenoh/src/net/routing/interceptor/access_control.rs               │
+# │  acl_interceptor_factories()                                       │
+# │  ├── 检查 query_strategy == Dynamic                               │
+# │  ├── 存储 dynamic_config (延迟初始化)                             │
+# │  └── 创建 AclEnforcer 拦截器                                       │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                          TLS客户端连接                               │
+# │  (证书: CN=zenoh-client, OU=sensor)                               │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    TLS证书提取 (unicast.rs)                         │
+# │  get_client_cert_info() → TlsAuthId                                │
+# │  ├── 提取 CN: "zenoh-client"                                       │
+# │  ├── 提取 OU: "sensor"                                            │
+# │  └── 创建 LinkUnicastTls (link_auth_id)                           │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    Transport层异步处理                              │
+# │  manager.send_async(LinkUnicast)                                  │
+# │  ├── TransportManager接收 (manager.rs)                            │
+# │  ├── handle_new_link_unicast() (unicast/manager.rs)               │
+# │  └── accept_link() 执行传输握手 (establishment/accept.rs)         │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    Transport创建完成                                │
+# │  init_transport_unicast() → TransportUnicast                       │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    ACL拦截器触发 (核心)                             │
+# │  zenoh/src/net/routing/interceptor/access_control.rs               │
+# │  new_transport_unicast()                                          │
+# │  ├── transport.get_links() 获取Link                               │
+# │  ├── CertificateInfo::from_link()                                 │
+# │  │   zenoh/src/net/dynamic_acl/provider.rs                        │
+# │  │   ├── 从 link.auth_identifier 提取CN                           │
+# │  │   ├── 构造 CertificateInfo 结构体                             │
+# │  │   └── 返回: {common_name, organizational_unit, ...}            │
+# │  └── 延迟初始化 AuthClient                                        │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    HTTP认证服务调用                                  │
+# │  zenoh/src/net/dynamic_acl/client.rs                               │
+# │  AuthClient.authenticate()                                        │
+# │  ├── 构造认证请求: {client_id, client_type, cert_common_name}     │
+# │  ├── HTTP POST /auth 端点                                         │
+# │  └── 接收响应: {is_authorized, rules, subject}                    │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    动态规则处理                                     │
+# │  zenoh/src/net/dynamic_acl/rules.rs & integrator.rs                │
+# │  ├── 转换 DynamicAclRule → AclConfigRule                          │
+# │  ├── 生成动态 Subject (integrator.rs)                             │
+# │  ├── 创建动态 Policy (integrator.rs)                              │
+# │  └── 构造 AclConfig {rules, subjects, policies}                   │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    动态策略应用                                     │
+# │  zenoh/src/net/routing/interceptor/authorization.rs                │
+# │  PolicyEnforcer.init() with dynamic_acl_config                     │
+# │  ├── init_static_acl() (复用静态逻辑)                             │
+# │  ├── 创建规则树和策略映射                                         │
+# │  └── 初始化权限检查引擎                                           │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                    权限检查执行                                     │
+# │  IngressAclEnforcer.action()                                      │
+# │  ├── PolicyEnforcer.policy_decision_point()                       │
+# │  ├── 检查 subject.id (动态生成)                                   │
+# │  ├── 匹配 key_expr 和消息类型                                     │
+# │  └── 返回 Allow/Deny 决策                                         │
+# └─────────────────┬───────────────────────────────────────────────────┘
+#                   │
+#                   ▼
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │                         消息路由/拒绝                                │
+# │  根据权限决策决定是否转发消息                                       │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+#
+# 关键文件位置总结
+#
+# | 组件 | 文件位置 | 主要功能 |
+# |------|---------|---------|
+# | ACL拦截器 | access_control.rs | 连接时触发认证，协调整个流程 |
+# | 认证客户端 | dynamic_acl/client.rs | HTTP调用外部认证服务 |
+# | 证书提取 | dynamic_acl/provider.rs | 从TLS链接提取证书信息 |
+# | 规则集成 | dynamic_acl/integrator.rs | 转换和生成动态ACL规则 |
+# | 规则处理 | dynamic_acl/rules.rs | 规则格式转换和验证 |
+# | 策略引擎 | authorization.rs | 权限决策点，规则匹配 |
+# | 配置结构 | zenoh-config/lib.rs | ACL配置定义和解析 |
+#
+#
+# 核心创新点
+#
+# 1. 延迟初始化: AuthClient在第一次连接时才创建，避免启动开销
+# 2. 连接级隔离: 每个连接独立认证和缓存策略，保证安全性
+# 3. 复用架构: 动态ACL复用静态ACL的权限检查引擎，代码复用率高
+# 4. 错误降级: 认证失败时自动回退，保证系统可用性
+#
+#
+# 动态ACL模块文件结构
+#
+# zenoh/src/net/dynamic_acl/
+# ├── mod.rs          # 模块导出和组织
+# ├── client.rs       # HTTP客户端，调用外部认证服务
+# ├── provider.rs     # 证书信息提取，数据结构定义
+# ├── integrator.rs   # 动态规则集成，策略生成
+# ├── rules.rs        # 规则处理，格式转换
+# └── deduplication.rs # 规则去重（当前未使用）
+#
+#
+# 配置示例
+#
+# access_control: {
+#   enabled: true,
+#   default_permission: "deny",
+#   query_strategy: "dynamic",
+#   dynamic_config: {
+#     type: "http",
+#     endpoint: "http://localhost:8080/auth",
+#     timeout_seconds: 5,
+#     retry_attempts: 3,
+#     retry_delay_seconds: 1
+#   }
+# }
+#
+#
+# 数据流统计
+#
+# - TLS证书提取: unicast.rs → LinkUnicastTls
+# - 异步传输: TransportManager → unicast/manager.rs
+# - 握手协议: establishment/accept.rs → TransportUnicast
+# - ACL触发: access_control.rs → 认证流程开始
+# - 证书转换: provider.rs → CertificateInfo
+# - 服务调用: client.rs → HTTP认证服务
+# - 规则处理: rules.rs + integrator.rs → 动态ACL配置
+# - 策略应用: authorization.rs → 权限检查引擎
+# - 权限决策: PolicyEnforcer → Allow/Deny
+#
+#
+# 实现成果
+#
+# - 动态权限控制: 运行时从外部服务获取权限规则
+# - 连接级隔离: 每个客户端连接独立认证和授权
+# - TLS集成: 无缝集成mTLS证书认证
+# - 高性能: 延迟初始化和连接级缓存
+# - 高可用: 认证失败自动降级到静态ACL
+# - 向后兼容: 完全兼容现有静态ACL配置

@@ -353,6 +353,8 @@ impl Default for AclConfig {
             rules: None,
             subjects: None,
             policies: None,
+            query_strategy: None,
+            dynamic_config: None,
         }
     }
 }
@@ -364,5 +366,11 @@ impl Default for ConnectionRetryModeDependentConf {
             period_max_ms: Some(ModeDependentValue::Unique(4000)),
             period_increase_factor: Some(ModeDependentValue::Unique(2.)),
         }
+    }
+}
+
+impl Default for QueryStrategy {
+    fn default() -> Self {
+        Self::Dynamic
     }
 }

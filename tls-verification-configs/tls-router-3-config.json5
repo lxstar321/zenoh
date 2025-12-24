@@ -1,0 +1,52 @@
+{
+  id: "c2d45e6f7890abcdef1234567890abcd",
+
+  listen: {
+    endpoints: ["tls/0.0.0.0:7447"]
+  },
+
+  connect: {
+    endpoints: [
+      "tls/gateway-router-1:7447",
+      "tls/gateway-router-2:7447"
+    ]
+  },
+
+  transport: {
+    link: {
+      tls: {
+        root_ca_certificate: "/app/certs/ca-cert.pem",
+        listen_private_key: "/app/certs/router-key.pem",
+        listen_certificate: "/app/certs/router-cert.pem",
+        connect_private_key: "/app/certs/router-key.pem",
+        connect_certificate: "/app/certs/router-cert.pem"
+      }
+    }
+  },
+
+  scouting: {
+    multicast: {
+      enabled: true,
+      address: "224.0.0.224:7446",
+      autoconnect: ["router"],
+      listen: {
+        router: true,
+        peer: false,
+        client: false
+      }
+    },
+    gossip: {
+      enabled: true,
+      multihop: false,
+      target: ["router"]
+    }
+  },
+
+  adminspace: {
+    enabled: true,
+    permissions: {
+      read: true,
+      write: false
+    }
+  }
+}

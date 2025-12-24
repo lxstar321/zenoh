@@ -1,0 +1,165 @@
+Zenoh项目目录结构脑图
+│
+├── 项目概述
+│   ├── Eclipse Zenoh: Zero Overhead Pub/Sub, Store/Query and Compute
+│   ├── 网络通信框架，统一数据动态、数据存储、查询和计算
+│   └── 版本: 1.6.2，基于Rust开发
+│
+├── 根目录配置&文档
+│   ├── Cargo.toml & Cargo.lock
+│   │   └── Rust工作空间配置，管理25+个crate
+│   ├── README.md
+│   │   └── 项目主要介绍文档
+│   ├── CHANGELOG.md
+│   │   └── 版本变更日志
+│   ├── LICENSE & NOTICE.md
+│   │   └── 开源许可证，EPL-2.0 OR Apache-2.0
+│   ├── rust-toolchain.toml
+│   │   └── Rust工具链版本指定(1.75.0)
+│   └── clippy.toml & rustfmt.toml
+│       └── 代码质量和格式化配置
+│
+├── 构建&CI系统
+│   ├── ci/ 目录
+│   │   ├── nostd-check/
+│   │   │   └── 无标准库兼容化检查
+│   │   └── valgrind-check/
+│   │       └── 内存泄漏和线程安全检查
+│   ├── build.rs
+│   │   └── 构建时脚本
+│   └── target/
+│       └── 编译产物存储目录
+│
+├── 安全&认证系统
+│   ├── certs/
+│   │   └── 证书存储目录
+│   ├── generate_mtls_certs.sh
+│   │   └── MTLS证书自动生成脚本
+│   ├── mtls_acl_config.json5
+│   │   └── MTLS访问控制列表配置
+│   └── MTLS_README.md & MTLS_TEST_README.md
+│       └── MTLS功能说明文档
+│
+├── 测试&示例系统
+│   ├── examples/ 目录
+│   │   └── examples/ 子目录 (40+个示例)
+│   │       ├── z_pub.rs & z_sub.rs
+│   │       │   └── 基础发布订阅示例
+│   │       ├── z_get.rs & z_queryable.rs
+│   │       │   └── 查询回复模式示例
+│   │       ├── z_*_shm.rs
+│   │       │   └── 共享内存传输示例
+│   │       └── z_*_thr.rs
+│   │           └── 多线程并发示例
+│   ├── acl_*.py & auth_service.py
+│   │   └── ACL测试脚本(Python)
+│   └── start_router.sh
+│       └── 路由器启动脚本
+│
+├── 核心模块
+│   ├── zenoh/ - 核心协议库
+│   │   ├── src/api/ - 公开API层
+│   │   │   ├── session.rs
+│   │   │   │   └── 会话管理
+│   │   │   ├── publisher.rs & subscriber.rs
+│   │   │   │   └── 发布订阅API
+│   │   │   ├── querier.rs & queryable.rs
+│   │   │   │   └── 查询回复API
+│   │   │   ├── key_expr.rs
+│   │   │   │   └── 键表达式处理
+│   │   │   └── builders/ & handlers/
+│   │   │       └── 构建器模式和处理句柄
+│   │   └── src/net/ - 网络协议实现层
+│   │       ├── routing/
+│   │       │   ├── dispatcher/
+│   │       │   │   └── 消息分发逻辑
+│   │       │   ├── hat/
+│   │       │   │   └── 路由表抽象
+│   │       │   └── interceptor/
+│   │       │       └── 消息拦截器
+│   │       └── protocol/
+│   │           ├── linkstate.rs
+│   │           │   └── 链路状态协议
+│   │           └── network.rs
+│   │               └── 网络协议实现
+│   ├── zenoh-ext/ - 扩展组件库
+│   │   ├── advanced_publisher.rs
+│   │   │   └── 高级发布者
+│   │   ├── advanced_subscriber.rs
+│   │   │   └── 高级订阅者
+│   │   ├── publication_cache.rs
+│   │   │   └── 发布缓存
+│   │   └── serialization.rs
+│   │       └── 序列化支持
+│   └── zenohd/ - 路由器守护进程
+│       ├── src/main.rs
+│       │   └── 路由器程序入口
+│       └── README.md
+│           └── 路由器使用指南
+│
+├── 基础组件库 (commons/)
+│   ├── zenoh-protocol/
+│   │   └── 协议定义和编解码
+│   ├── zenoh-transport/
+│   │   └── 传输层抽象
+│   ├── zenoh-link/ & zenoh-link-commons/
+│   │   └── 链路层接口
+│   ├── zenoh-config/
+│   │   └── 配置管理
+│   ├── zenoh-keyexpr/
+│   │   └── 键表达式处理
+│   ├── zenoh-buffers/
+│   │   └── 缓冲区管理
+│   ├── zenoh-codec/
+│   │   └── 编解码器
+│   ├── zenoh-collections/
+│   │   └── 集合数据结构
+│   ├── zenoh-core/
+│   │   └── 核心类型和traits
+│   ├── zenoh-crypto/
+│   │   └── 加密功能
+│   ├── zenoh-macros/
+│   │   └── 过程宏
+│   ├── zenoh-runtime/
+│   │   └── 运行时管理
+│   ├── zenoh-shm/
+│   │   └── 共享内存
+│   ├── zenoh-sync/
+│   │   └── 同步原语
+│   ├── zenoh-task/
+│   │   └── 任务管理
+│   └── zenoh-util/
+│       └── 工具函数
+│
+├── 网络传输层 (io/)
+│   ├── zenoh-transport/
+│   │   └── 传输抽象层
+│   └── zenoh-links/
+│       ├── zenoh-link-tcp/
+│       │   └── TCP传输协议
+│       ├── zenoh-link-tls/
+│       │   └── TLS加密传输
+│       ├── zenoh-link-quic/
+│       │   └── QUIC协议
+│       ├── zenoh-link-udp/
+│       │   └── UDP传输
+│       ├── zenoh-link-ws/
+│       │   └── WebSocket传输
+│       ├── zenoh-link-unixsock_stream/
+│       │   └── Unix域套接字传输
+│       ├── zenoh-link-serial/
+│       │   └── 串口传输
+│       └── zenoh-link-vsock/
+│           └── 虚拟套接字传输
+│
+└── 插件系统 (plugins/)
+    ├── zenoh-plugin-trait/
+    │   └── 插件API接口
+    ├── zenoh-plugin-rest/
+    │   └── REST API插件
+    ├── zenoh-plugin-storage-manager/
+    │   └── 存储管理器插件
+    ├── zenoh-backend-traits/
+    │   └── 存储后端API
+    └── zenoh-plugin-example/
+        └── 插件开发示例

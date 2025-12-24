@@ -1,0 +1,50 @@
+/// Zenoh 客户端 mTLS 配置示例
+/// 用于测试 mTLS 通信的客户端配置
+{
+  /// 节点模式设置为客户端
+  mode: "client",
+
+  /// 节点元数据
+  metadata: {
+    name: "zenoh-mtls-client",
+    location: "test-zone",
+  },
+
+  /// 连接到启用 mTLS 的路由器
+  connect: {
+    /// 连接到 TLS 端点
+    endpoints: ["tls/127.0.0.1:8447"],
+    /// 客户端连接失败时退出
+    exit_on_failure: true,
+    /// 连接超时设置
+    timeout_ms: 10000,
+  },
+
+  /// 客户端通常不监听
+  listen: {
+    timeout_ms: 0,
+    endpoints: [],
+  },
+
+  /// 传输层配置 - 客户端 mTLS 配置
+  transport: {
+    link: {
+      /// TLS 客户端配置
+      tls: {
+        /// CA 证书路径 - 验证服务端证书
+        root_ca_certificate: "./certs/ca-cert.pem",
+
+        /// 客户端证书配置（用于 mTLS 认证）
+        enable_mtls: true,
+        connect_private_key: "./certs/client-key.pem",
+        connect_certificate: "./certs/client-cert.pem",
+
+        /// 连接时验证服务端证书中的主机名
+        verify_name_on_connect: true,
+
+        /// 证书过期时断开连接
+        close_link_on_expiration: true,
+      },
+    },
+  },
+}

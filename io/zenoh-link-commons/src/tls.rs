@@ -45,6 +45,10 @@ pub mod config {
     /// The time duration in milliseconds to wait for the TLS handshake to complete.
     pub const TLS_HANDSHAKE_TIMEOUT_MS: &str = "tls_handshake_timeout_ms";
     pub const TLS_HANDSHAKE_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+    pub const TLS_AUTH_ID_FIELDS: &str = "auth_identifier_fields";
+    pub const TLS_AUTH_ID_FIELDS_DEFAULT: &str = "subject.cn";
+    pub const TLS_AUTH_ID_DELIMITER: &str = "auth_identifier_delimiter";
+    pub const TLS_AUTH_ID_DELIMITER_DEFAULT: &str = ":";
 }
 
 impl ServerCertVerifier for WebPkiVerifierAnyServerName {

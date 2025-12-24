@@ -1,0 +1,29 @@
+{
+  id: "d3e56f7890abcdef1234567890abcdef",
+
+  connect: {
+    endpoints: [
+      "tls/gateway-router-1:7447",
+      "tls/gateway-router-2:7447"
+    ]
+  },
+
+  transport: {
+    link: {
+      tls: {
+        root_ca_certificate: "/app/certs/ca-cert.pem",
+        connect_private_key: "/app/certs/agent-key.pem",
+        connect_certificate: "/app/certs/agent-cert.pem"
+      }
+    }
+  },
+
+  scouting: {
+    multicast: {
+      enabled: false
+    },
+    gossip: {
+      enabled: false
+    }
+  }
+}

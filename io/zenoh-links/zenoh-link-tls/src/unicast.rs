@@ -70,7 +70,8 @@ pub struct LinkUnicastTls {
     // Make sure there are no concurrent read or writes
     write_mtx: AsyncMutex<()>,
     read_mtx: AsyncMutex<()>,
-    auth_identifier: LinkAuthId,
+    auth_identifier: TlsAuthId,
+    link_auth_id: LinkAuthId,
     mtu: BatchSize,
     expiration_manager: Option<LinkCertExpirationManager>,
 }
@@ -83,7 +84,7 @@ impl LinkUnicastTls {
         socket: TlsStream<TcpStream>,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
-        auth_identifier: LinkAuthId,
+        auth_identifier: TlsAuthId,
         expiration_manager: Option<LinkCertExpirationManager>,
     ) -> LinkUnicastTls {
         let (tcp_stream, _) = socket.get_ref();
@@ -132,6 +133,9 @@ impl LinkUnicastTls {
             mtu = (mtu as u32).min(tgt) as BatchSize;
         }
 
+        // Convert TlsAuthId to LinkAuthId for backward compatibility
+        let link_auth_id = auth_identifier.clone().into();
+
         // Build the Tls object
         LinkUnicastTls {
             inner: UnsafeCell::new(socket),
@@ -142,6 +146,7 @@ impl LinkUnicastTls {
             write_mtx: AsyncMutex::new(()),
             read_mtx: AsyncMutex::new(()),
             auth_identifier,
+            link_auth_id,
             mtu,
             expiration_manager,
         }
@@ -256,7 +261,7 @@ impl LinkUnicastTrait for LinkUnicastTls {
 
     #[inline(always)]
     fn get_auth_id(&self) -> &LinkAuthId {
-        &self.auth_identifier
+        &self.link_auth_id
     }
 }
 
@@ -496,6 +501,7 @@ async fn accept_task(
             res = listener.accept() => {
                 match res {
                     Ok((tls_stream, dst_addr)) => {
+                        tracing::debug!("TLS handshake completed for connection from {:?}", dst_addr);
                         let (tcp_stream, tls_conn) = tls_stream.get_ref();
                         let src_addr =  match tcp_stream.local_addr()  {
                             Ok(sa) => sa,
@@ -504,7 +510,9 @@ async fn accept_task(
                                 continue;
                             }
                         };
-                        let auth_identifier = get_client_cert_common_name(tls_conn)?;
+                        tracing::debug!("TLS connection accepted, checking client certificate OU field");
+                        let auth_identifier = get_client_cert_info(tls_conn)?;
+                        tracing::debug!("Client certificate validation successful: {:?}", auth_identifier);
 
                         // Get certificate chain expiration
                         let mut maybe_expiration_time = None;
@@ -537,7 +545,7 @@ async fn accept_task(
                                 tokio_rustls::TlsStream::Server(tls_stream),
                                 src_addr,
                                 dst_addr,
-                                auth_identifier.into(),
+                                auth_identifier,
                                 expiration_manager,
                             )
                         });
@@ -548,7 +556,12 @@ async fn accept_task(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("{}. Hint: increase the system open file limit.", e);
+                        // Check if this is a certificate validation error
+                        if e.to_string().contains("Organizational Unit") {
+                            tracing::warn!("Certificate validation failed: {}", e);
+                        } else {
+                            tracing::warn!("{}. Hint: increase the system open file limit.", e);
+                        }
                         // Throttle the accept loop upon an error
                         // NOTE: This might be due to various factors. However, the most common case is that
                         //       the process has reached the maximum number of open files in the system. On
@@ -565,27 +578,75 @@ async fn accept_task(
     Ok(())
 }
 
-fn get_client_cert_common_name(tls_conn: &rustls::CommonState) -> ZResult<TlsAuthId> {
+fn get_client_cert_info(tls_conn: &rustls::CommonState) -> ZResult<TlsAuthId> {
     if let Some(serv_certs) = tls_conn.peer_certificates() {
         let (_, cert) = X509Certificate::from_der(serv_certs[0].as_ref())?;
-        let subject_name = &cert
+
+        // 调试：打印证书主题信息
+        tracing::debug!("Certificate subject: {:?}", cert.subject);
+        tracing::debug!("Certificate issuer: {:?}", cert.issuer);
+
+        // 打印所有字段
+        tracing::debug!("Subject fields:");
+        for attr in cert.subject.iter_attributes() {
+            tracing::debug!("  Attribute: {:?}", attr);
+        }
+
+        // 提取 Common Name (CN)
+        let client_id = cert
             .subject
             .iter_common_name()
             .next()
             .and_then(|cn| cn.as_str().ok())
-            .unwrap();
+            .map(|s| s.to_string());
+
+        // 提取 Organizational Unit (OU) - 必须存在，否则拒绝连接
+        let client_type = cert
+            .subject
+            .iter_organizational_unit()
+            .next()
+            .and_then(|ou| ou.as_str().ok())
+            .map(|s| s.to_string());
+
+        tracing::debug!("Extracted client_id (CN): {:?}", client_id);
+        tracing::debug!("Extracted client_type (OU): {:?}", client_type);
+
+        // 如果没有OU字段，拒绝连接
+        if client_type.is_none() {
+            tracing::warn!("Certificate validation failed: missing Organizational Unit (OU) field");
+            let err = zerror!("Certificate missing Organizational Unit (OU) field - connection rejected");
+            return Err(err.into());
+        }
+
+        // 组合认证值 (用于向后兼容)
+        let auth_value = if let (Some(id), Some(tp)) = (&client_id, &client_type) {
+            Some(format!("{}:{}", id, tp))
+        } else {
+            client_id.clone()
+        };
 
         Ok(TlsAuthId {
-            auth_value: Some(subject_name.to_string()),
+            auth_value,
+            client_id,
+            client_type,
         })
     } else {
-        Ok(TlsAuthId { auth_value: None })
+        tracing::debug!("No client certificates provided");
+        Ok(TlsAuthId {
+            auth_value: None,
+            client_id: None,
+            client_type: None,
+        })
     }
 }
 
 fn get_server_cert_common_name(tls_conn: &rustls::ClientConnection) -> ZResult<TlsAuthId> {
     let serv_certs = tls_conn.peer_certificates().unwrap();
-    let mut auth_id = TlsAuthId { auth_value: None };
+    let mut auth_id = TlsAuthId {
+        auth_value: None,
+        client_id: None,
+        client_type: None,
+    };
 
     // Need the first certificate in the chain so no need for looping
     if let Some(item) = serv_certs.iter().next() {
@@ -599,6 +660,8 @@ fn get_server_cert_common_name(tls_conn: &rustls::ClientConnection) -> ZResult<T
 
         auth_id = TlsAuthId {
             auth_value: Some(subject_name.to_string()),
+            client_id: Some(subject_name.to_string()),
+            client_type: None, // 服务器端可能不需要OU
         };
         return Ok(auth_id);
     }
@@ -623,22 +686,28 @@ fn get_cert_chain_expiration(
     Ok(link_expiration)
 }
 
+#[derive(Clone)]
 struct TlsAuthId {
     auth_value: Option<String>,
+    client_id: Option<String>,
+    client_type: Option<String>,
 }
 
 impl Debug for TlsAuthId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Common Name: {}",
-            self.auth_value.as_deref().unwrap_or("None")
+            "Client ID: {}, Type: {}",
+            self.client_id.as_deref().unwrap_or("None"),
+            self.client_type.as_deref().unwrap_or("None")
         )
     }
 }
 
 impl From<TlsAuthId> for LinkAuthId {
     fn from(value: TlsAuthId) -> Self {
-        LinkAuthId::Tls(value.auth_value.clone())
+        // Use auth_value if available (contains "CN:OU" format), otherwise fall back to client_id
+        // This preserves OU information for dynamic ACL
+        LinkAuthId::Tls(value.auth_value.or(value.client_id))
     }
 }

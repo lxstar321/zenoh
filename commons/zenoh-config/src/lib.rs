@@ -358,6 +358,27 @@ pub struct AclConfigPolicyEntry {
     pub subjects: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicAclConfig {
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub endpoint: String,
+    pub timeout_seconds: u64,
+    pub retry_attempts: u32,
+    pub retry_delay_seconds: u64,
+    pub auth_token: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryStrategy {
+    /// 仅使用静态ACL配置
+    Static,
+    /// 仅使用动态ACL，通过认证服务获取权限
+    Dynamic,
+}
+
 #[derive(Clone, Serialize, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRule {
@@ -382,6 +403,11 @@ pub enum AclMessage {
     LivelinessQuery,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StatsFilterConfig {
+    pub key: OwnedKeyExpr,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
@@ -402,11 +428,6 @@ pub enum AutoConnectStrategy {
     /// This strategy may not be suited if one of the node is not reachable by the other one,
     /// for example because of a private IP.
     GreaterZid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct StatsFilterConfig {
-    pub key: OwnedKeyExpr,
 }
 
 pub trait ConfigValidator: Send + Sync {
@@ -886,6 +907,8 @@ validated_struct::validator! {
             pub rules: Option<Vec<AclConfigRule>>,
             pub subjects: Option<Vec<AclConfigSubjects>>,
             pub policies: Option<Vec<AclConfigPolicyEntry>>,
+            pub query_strategy: Option<QueryStrategy>,
+            pub dynamic_config: Option<DynamicAclConfig>,
         },
 
         /// Configuration of the low-pass filter

@@ -46,6 +46,31 @@ use zenoh_protocol::core::{
 };
 use zenoh_result::{bail, zerror, ZError, ZResult};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthField {
+    SubjectCn,
+    SubjectOu,
+    IssuerCn,
+    IssuerOu,
+}
+
+fn parse_auth_fields(s: &str) -> Vec<AuthField> {
+    let mut out = Vec::new();
+    for token in s.split(',') {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "subject.cn" => out.push(AuthField::SubjectCn),
+            "subject.ou" => out.push(AuthField::SubjectOu),
+            "issuer.cn" => out.push(AuthField::IssuerCn),
+            "issuer.ou" => out.push(AuthField::IssuerOu),
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        out.push(AuthField::SubjectCn);
+    }
+    out
+}
+
 #[derive(Default, Clone, Copy, Debug)]
 pub struct TlsConfigurator;
 
@@ -176,6 +201,8 @@ pub(crate) struct TlsServerConfig<'a> {
     pub(crate) server_config: ServerConfig,
     pub(crate) tls_handshake_timeout: Duration,
     pub(crate) tls_close_link_on_expiration: bool,
+    pub(crate) auth_fields: Vec<AuthField>,
+    pub(crate) auth_delimiter: String,
     pub(crate) tcp_socket_config: TcpSocketConfig<'a>,
 }
 
@@ -259,6 +286,15 @@ impl<'a> TlsServerConfig<'a> {
                 .transpose()?
                 .unwrap_or(config::TLS_HANDSHAKE_TIMEOUT_MS_DEFAULT),
         );
+        let auth_fields = parse_auth_fields(
+            config
+                .get(config::TLS_AUTH_ID_FIELDS)
+                .unwrap_or(config::TLS_AUTH_ID_FIELDS_DEFAULT),
+        );
+        let auth_delimiter = config
+            .get(config::TLS_AUTH_ID_DELIMITER)
+            .unwrap_or(config::TLS_AUTH_ID_DELIMITER_DEFAULT)
+            .to_string();
 
         let mut tcp_rx_buffer_size = None;
         if let Some(size) = config.get(TCP_SO_RCV_BUF) {
@@ -283,6 +319,8 @@ impl<'a> TlsServerConfig<'a> {
             server_config: sc,
             tls_handshake_timeout,
             tls_close_link_on_expiration,
+            auth_fields,
+            auth_delimiter,
             tcp_socket_config: TcpSocketConfig::new(
                 tcp_tx_buffer_size,
                 tcp_rx_buffer_size,
@@ -317,6 +355,8 @@ impl<'a> TlsServerConfig<'a> {
 pub(crate) struct TlsClientConfig<'a> {
     pub(crate) client_config: ClientConfig,
     pub(crate) tls_close_link_on_expiration: bool,
+    pub(crate) auth_fields: Vec<AuthField>,
+    pub(crate) auth_delimiter: String,
     pub(crate) tcp_socket_config: TcpSocketConfig<'a>,
 }
 
@@ -433,6 +473,16 @@ impl<'a> TlsClientConfig<'a> {
             }
         };
 
+        let auth_fields = parse_auth_fields(
+            config
+                .get(config::TLS_AUTH_ID_FIELDS)
+                .unwrap_or(config::TLS_AUTH_ID_FIELDS_DEFAULT),
+        );
+        let auth_delimiter = config
+            .get(config::TLS_AUTH_ID_DELIMITER)
+            .unwrap_or(config::TLS_AUTH_ID_DELIMITER_DEFAULT)
+            .to_string();
+
         let mut tcp_rx_buffer_size = None;
         if let Some(size) = config.get(TCP_SO_RCV_BUF) {
             tcp_rx_buffer_size = Some(
@@ -455,6 +505,8 @@ impl<'a> TlsClientConfig<'a> {
         Ok(TlsClientConfig {
             client_config: cc,
             tls_close_link_on_expiration,
+            auth_fields,
+            auth_delimiter,
             tcp_socket_config: TcpSocketConfig::new(
                 tcp_tx_buffer_size,
                 tcp_rx_buffer_size,

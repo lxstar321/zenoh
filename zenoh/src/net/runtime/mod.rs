@@ -82,7 +82,7 @@ use crate::{
         builders::close::{Closeable, Closee},
         config::{Config, Notifier},
     },
-    GIT_VERSION,
+    GIT_VERSION, LONG_VERSION,
 };
 
 /// State of current lazily-initialized [`ShmProvider`](ShmProvider) associated with [`Runtime`](Runtime)
@@ -122,8 +122,6 @@ pub(crate) struct RuntimeState {
     start_conditions: Arc<StartConditions>,
     pending_connections: tokio::sync::Mutex<HashSet<ZenohIdProto>>,
     namespace: Option<OwnedNonWildKeyExpr>,
-    #[cfg(feature = "stats")]
-    stats: zenoh_stats::StatsRegistry,
 }
 
 #[allow(private_interfaces)]
@@ -449,21 +447,10 @@ impl RuntimeBuilder {
         tracing::info!("Using ZID: {}", zid);
 
         let whatami = unwrap_or_default!(config.mode());
-
-        #[cfg(feature = "stats")]
-        let stats = zenoh_stats::StatsRegistry::new(zid, whatami, &*crate::LONG_VERSION);
-
         let hlc = (*unwrap_or_default!(config.timestamping().enabled().get(whatami)))
             .then(|| Arc::new(HLCBuilder::new().with_id(uhlc::ID::from(&zid)).build()));
 
-        let router = Arc::new(Router::new(
-            zid,
-            whatami,
-            hlc.clone(),
-            &config,
-            #[cfg(feature = "stats")]
-            stats.clone(),
-        )?);
+        let router = Arc::new(Router::new(zid, whatami, hlc.clone(), &config)?);
 
         let handler = Arc::new(RuntimeTransportEventHandler {
             runtime: std::sync::RwLock::new(WeakRuntime { state: Weak::new() }),
@@ -479,11 +466,7 @@ impl RuntimeBuilder {
         let transport_manager_builder =
             transport_manager_builder.shm_reader(shm_clients.map(ShmReader::new));
 
-        let transport_manager = transport_manager_builder.build(
-            handler.clone(),
-            #[cfg(feature = "stats")]
-            stats.clone(),
-        )?;
+        let transport_manager = transport_manager_builder.build(handler.clone())?;
 
         // Plugins manager
         #[cfg(feature = "plugins")]
@@ -516,8 +499,6 @@ impl RuntimeBuilder {
                 start_conditions: Arc::new(StartConditions::default()),
                 pending_connections: tokio::sync::Mutex::new(HashSet::new()),
                 namespace,
-                #[cfg(feature = "stats")]
-                stats,
             }),
         };
         *handler.runtime.write().unwrap() = Runtime::downgrade(&runtime);
@@ -673,11 +654,6 @@ impl Runtime {
     pub(crate) async fn remove_pending_connection(&self, zid: &ZenohIdProto) -> bool {
         self.state.remove_pending_connection(zid).await
     }
-
-    #[cfg(feature = "stats")]
-    pub fn stats(&self) -> &zenoh_stats::StatsRegistry {
-        &self.state.stats
-    }
 }
 
 impl From<Runtime> for DynamicRuntime {
@@ -763,6 +739,12 @@ impl TransportPeerEventHandler for RuntimeSession {
         for handler in &self.slave_handlers {
             handler.new_link(link.clone());
         }
+
+        // Handle device connect notifications for dynamic ACL
+        #[cfg(feature = "dynamic_acl")]
+        {
+            self.handle_device_connect(&link);
+        }
     }
 
     fn del_link(&self, link: Link) {
@@ -770,6 +752,13 @@ impl TransportPeerEventHandler for RuntimeSession {
         for handler in &self.slave_handlers {
             handler.del_link(link.clone());
         }
+
+        // Handle device disconnect notifications for dynamic ACL
+        #[cfg(feature = "dynamic_acl")]
+        {
+            self.handle_device_disconnect(&link);
+        }
+
         Runtime::closed_link(self, link.dst.to_endpoint());
     }
 
@@ -783,6 +772,192 @@ impl TransportPeerEventHandler for RuntimeSession {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(feature = "dynamic_acl")]
+impl RuntimeSession {
+    fn handle_device_disconnect(&self, link: &Link) {
+        tracing::debug!(
+            "[RuntimeSession] handle_device_disconnect called for endpoint: {}, link_src: {}, link_dst: {}",
+            link.dst.to_endpoint(),
+            link.src.to_string(),
+            link.dst.to_string()
+        );
+
+        // Check if dynamic ACL is configured
+        let config = self.runtime.state.config.lock().0.clone();
+        let access_control = config.access_control();
+        tracing::debug!(
+            "[RuntimeSession] Access control enabled: {}, has dynamic config: {}",
+            *access_control.enabled(),
+            access_control.dynamic_config().is_some()
+        );
+
+        if *access_control.enabled() {
+            if let Some(dynamic_config) = access_control.dynamic_config() {
+                // Extract client information from link
+                if let Some(cert_info) =
+                    crate::net::dynamic_acl::provider::CertificateInfo::from_link(link)
+                {
+                    tracing::debug!(
+                        "[RuntimeSession] Extracted cert info for client: {}, type: {:?}",
+                        cert_info.common_name,
+                        cert_info.organizational_unit
+                    );
+
+                    // Get endpoint string before moving to async task
+                    let endpoint_str = link.dst.to_endpoint().to_string();
+
+                    // Create AuthClient and send disconnect notification
+                    let dynamic_config = dynamic_config.clone();
+                    tokio::spawn(async move {
+                        let task_id = format!(
+                            "disconnect-{}",
+                            std::thread::current().name().unwrap_or("unknown")
+                        );
+                        tracing::debug!(
+                            "[{}] Starting disconnect notification task for client: {}",
+                            task_id,
+                            cert_info.common_name
+                        );
+
+                        if let Ok(auth_client) =
+                            crate::net::dynamic_acl::client::AuthClient::new(dynamic_config)
+                        {
+                            let client_id = cert_info.common_name;
+                            let client_type = cert_info
+                                .organizational_unit
+                                .unwrap_or_else(|| "default".to_string());
+
+                            tracing::debug!(
+                                "[{}] Sending disconnect notification for client: {} type: {}",
+                                task_id,
+                                client_id,
+                                client_type
+                            );
+
+                            if let Err(e) = auth_client
+                                .notify_device_disconnect(
+                                    &client_id,
+                                    &client_type,
+                                    Some(&format!("Connection to {} closed", endpoint_str)),
+                                )
+                                .await
+                            {
+                                tracing::error!(
+                                    "[{}] Failed to send device disconnect notification for {}: {}",
+                                    task_id,
+                                    client_id,
+                                    e
+                                );
+                            } else {
+                                tracing::info!(
+                                    "[{}] Sent device disconnect notification for {}",
+                                    task_id,
+                                    client_id
+                                );
+                            }
+                        } else {
+                            tracing::error!("[{}] Failed to create AuthClient", task_id);
+                        }
+                    });
+                } else {
+                    tracing::debug!(
+                        "[RuntimeSession] Failed to extract certificate info from link"
+                    );
+                }
+            }
+        }
+    }
+
+    fn handle_device_connect(&self, link: &Link) {
+        tracing::debug!(
+            "[RuntimeSession] handle_device_connect called for endpoint: {}, link_src: {}, link_dst: {}",
+            link.dst.to_endpoint(),
+            link.src.to_string(),
+            link.dst.to_string()
+        );
+
+        // Check if dynamic ACL is configured
+        let config = self.runtime.state.config.lock().0.clone();
+        let access_control = config.access_control();
+        if *access_control.enabled() {
+            if let Some(dynamic_config) = access_control.dynamic_config() {
+                // Extract client information from link
+                if let Some(cert_info) =
+                    crate::net::dynamic_acl::provider::CertificateInfo::from_link(link)
+                {
+                    tracing::debug!(
+                        "[RuntimeSession] Extracted cert info for client: {}, type: {:?}",
+                        cert_info.common_name,
+                        cert_info.organizational_unit
+                    );
+
+                    // Get endpoint string before moving to async task
+                    let _endpoint_str = link.dst.to_endpoint().to_string();
+
+                    // Create AuthClient and send connect notification
+                    let dynamic_config = dynamic_config.clone();
+                    tokio::spawn(async move {
+                        let task_id = format!(
+                            "connect-{}",
+                            std::thread::current().name().unwrap_or("unknown")
+                        );
+                        tracing::debug!(
+                            "[{}] Starting connect notification task for client: {}",
+                            task_id,
+                            cert_info.common_name
+                        );
+
+                        if let Ok(auth_client) =
+                            crate::net::dynamic_acl::client::AuthClient::new(dynamic_config)
+                        {
+                            let client_id = cert_info.common_name;
+                            let client_type = cert_info
+                                .organizational_unit
+                                .unwrap_or_else(|| "default".to_string());
+
+                            tracing::debug!(
+                                "[{}] Sending connect notification for client: {} type: {}",
+                                task_id,
+                                client_id,
+                                client_type
+                            );
+
+                            if let Err(e) = auth_client
+                                .notify_device_connect(
+                                    &client_id,
+                                    &client_type,
+                                    cert_info.interface.as_deref(),
+                                    Some("tls"), // Link protocol
+                                )
+                                .await
+                            {
+                                tracing::error!(
+                                    "[{}] Failed to send device connect notification for {}: {}",
+                                    task_id,
+                                    client_id,
+                                    e
+                                );
+                            } else {
+                                tracing::info!(
+                                    "[{}] Sent device connect notification for {}",
+                                    task_id,
+                                    client_id
+                                );
+                            }
+                        } else {
+                            tracing::error!("[{}] Failed to create AuthClient", task_id);
+                        }
+                    });
+                } else {
+                    tracing::debug!(
+                        "[RuntimeSession] Failed to extract certificate info from link"
+                    );
+                }
+            }
+        }
     }
 }
 
